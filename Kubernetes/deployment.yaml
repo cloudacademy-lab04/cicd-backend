@@ -1,0 +1,22 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend-lab04
+  labels:
+    app: backend-lab04
+spec:
+  selector:
+    matchLabels:
+      app: backend-lab04
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: backend-lab04
+    spec:
+      containers:
+        - name: backend-lab04
+          image: euijeonggo/back-service
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
