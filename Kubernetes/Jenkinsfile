@@ -1,0 +1,91 @@
+def label = "worker-${UUID.randomUUID().toString()}"
+
+// Slack 알림
+
+podTemplate(label: label, containers: [
+// #0 필요한 Pod생성
+containerTemplate(name: 'maven', image: 'maven:3.3.9-jdk-8-alpine', ttyEnabled: true, command: 'cat'),
+containerTemplate(name: "scanner", image: "newtmitch/sonar-scanner", ttyEnabled: true, command: "cat"),
+containerTemplate(name: 'docker', image: 'docker:dind', command: 'dockerd --host=unix:///var/run/docker.sock --host=tcp://0.0.0.0:2375 --storage-driver=overlay', ttyEnabled: true, alwaysPullImage: true, privileged: true),
+containerTemplate(name: 'kubectl', image: 'roffe/kubectl', command: 'cat', ttyEnabled: true)
+]) {
+  node(label) {
+	  
+	// 예외처리 구문
+	try {
+		// Slack - 빌드 시작시
+
+		// #1 Github 소스 가져오기
+		stage('Get Source'){
+			git credentialsId: 'github-lab04', url: 'https://github.com/cloudacademy-lab04/cicd-backend.git', branch: 'master'
+		}
+		// #2 Properties 파일 읽기		
+		def props = readProperties file:"./Kubernetes/pipeline.properties"
+		def tag = props["version"]
+		def dockerRegistry = props["dockerRegistry"]
+		def credentialRegistry=props["credentialRegistry"]
+		def image = props["image"]
+		def appname = props["appname"]
+		def containername = props["containerName"]
+		def deployment = props["deployment"]
+		def service = props["service"]
+		def namespace = props["namespace"]
+		def sonarQubeURL = props["sonarQubeURL"]
+		def sonarQubeProject = props["sonarQubeProject"]
+		
+		// 재배포를 위한 tag를 재정의
+		def timeStamp = System.currentTimeMillis()
+		echo "TimeStamp: ${timeStamp}"
+		tag = tag+"-"+timeStamp
+
+		// #3 빌드 Stage
+		stage('Build'){
+			container('maven'){
+				sh "mvn clean install"
+			}
+		}
+		
+		// #4 Sonarqube 정적분석 Stage
+		stage('Static Code Analysis'){
+			container('scanner'){
+				sh "sonar-scanner \
+					-Dsonar.projectName=${sonarQubeProject} \
+				        -Dsonar.projectKey=${sonarQubeProject} \
+					-Dsonar.host.url=${sonarQubeURL} \
+					-Dsonar.projectBaseDir=./ \
+					-Dsonar.source=src/main/java \
+					-Dsonar.java.binaries=target/classes \
+					-Dsonar.language=java \
+					-Dsonar.sourceEncoding=UTF-8"
+			}
+		}
+
+		// #5 컨테이너 이미지 생성 Stage
+		stage('Dockerizing'){
+			container('docker'){
+				docker.withRegistry("${dockerRegistry}", "${credentialRegistry}") {
+				    sh "docker build -f ./Dockerfile -t ${image}:${tag} ${WORKSPACE}"
+				    sh "docker push ${image}:${tag}"
+				    sh "docker tag ${image}:${tag} ${image}:latest"
+				    sh "docker push ${image}:latest"
+				}
+			}
+		}
+
+		// #6 배포 Stage
+		stage('Deploy'){
+			container('kubectl'){
+				sh "kubectl apply -n ${namespace} -f ${deployment}"
+				sh "kubectl apply -n ${namespace} -f ${service}"
+				sh "kubectl get svc -n ${namespace}"
+			}
+		}
+		// Slack - 빌드 성공시
+
+
+	} catch(e) {
+		// Slack - 빌드 실패시
+
+	}
+  }
+}
